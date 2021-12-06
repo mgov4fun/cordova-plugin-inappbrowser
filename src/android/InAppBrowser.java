@@ -339,6 +339,76 @@ public class InAppBrowser extends CordovaPlugin {
         return true;
     }
 
+    // Kapsel change  - needed for js debugging in Chrome
+    @Override
+    protected void pluginInitialize() {
+        super.pluginInitialize();
+
+        this.cordova.getActivity().runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                ApplicationInfo appInfo = webView.getContext().getApplicationContext().getApplicationInfo();
+                if ((appInfo.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+                        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                    try {
+                        WebView.setWebContentsDebuggingEnabled(true);
+                    } catch (IllegalArgumentException e) {
+                        Log.e(LOG_TAG, "Failed to set debugging for Webview!");
+                    }
+                }
+            }
+        });
+    }
+
+    // More kapsel changes...
+    private String getFileContentsAsString(String filePath) {
+        InputStream inputStream = null;
+        InputStreamReader inputStreamReader = null;
+        BufferedReader bufferedReader = null;
+        String jsCode = null;
+        try {
+            inputStream = this.cordova.getActivity().getAssets().open(filePath);
+            inputStreamReader = new InputStreamReader(inputStream);
+            bufferedReader = new BufferedReader(inputStreamReader);
+            StringBuilder stringBuilder = new StringBuilder();
+            String line = bufferedReader.readLine();
+            while (line != null) {
+                stringBuilder.append(line);
+                stringBuilder.append("\n");
+                line = bufferedReader.readLine();
+            }
+            jsCode = stringBuilder.toString();
+        } catch (FileNotFoundException e) {
+            Log.e(LOG_TAG, "FileNotfoundException while injecting javascript into IAB from file.", e);
+        } catch (IOException e) {
+            Log.e(LOG_TAG, "IOException while injecting javascript into IAB from file.", e);
+        } finally {
+            if (inputStream != null) {
+                try {
+                    inputStream.close();
+                } catch (IOException e) {
+                    Log.w(LOG_TAG, "Exception closing InputStream", e);
+                }
+            }
+            if (inputStreamReader != null) {
+                try {
+                    inputStreamReader.close();
+                } catch (IOException e) {
+                    Log.w(LOG_TAG, "Exception closing InputStreamReader", e);
+                }
+            }
+            if (bufferedReader != null) {
+                try {
+                    bufferedReader.close();
+                } catch (IOException e) {
+                    Log.w(LOG_TAG, "Exception closing BufferedReader", e);
+                }
+            }
+        }
+        return jsCode;
+    }
+    // Kapsel change end
+
     /**
      * Called when the view navigates.
      */
@@ -430,7 +500,13 @@ public class InAppBrowser extends CordovaPlugin {
             StringTokenizer features = new StringTokenizer(optString, ",");
             StringTokenizer option;
             while(features.hasMoreElements()) {
-                option = new StringTokenizer(features.nextToken(), "=");
+                //Kapsel modification start
+                String nextToken = features.nextToken();
+                if(!nextToken.contains("=")){ // Ignore invalid settings. Such as noopener and noreferrer. window.opener and referrer is not accessible in inappbrowser
+                    continue;
+                }
+                //Kapsel modification end
+                option = new StringTokenizer(nextToken/*Kapsel modification*/, "=");
                 if (option.hasMoreElements()) {
                     String key = option.nextToken();
                     String value = option.nextToken();
@@ -533,6 +609,9 @@ public class InAppBrowser extends CordovaPlugin {
                         if (dialog != null && !cordova.getActivity().isFinishing()) {
                             dialog.dismiss();
                             dialog = null;
+                            // Kapsel change: call inAppWebView.destroy() or else the webview hangs
+                            // around (and is visible via inspect in Chrome).
+                            inAppWebView.destroy();
                         }
                     }
                 });
@@ -710,6 +789,24 @@ public class InAppBrowser extends CordovaPlugin {
             if (fullscreenSet != null) {
                 fullscreen = fullscreenSet.equals("yes") ? true : false;
             }
+            // Patch - CB-4083 - Start
+            String access = features.get(ALLOW_FILE_ACCESS_FROM_FILE);
+            if (access != null) {
+                allowFileAccessFromFile = access.equals("yes") ? true : false;
+            }else{
+                allowFileAccessFromFile = true;
+            }
+            // Patch - CB-4083 - End
+            // Patch - Support back button event - Start
+            String overrideBack = features.get(OVERRIDE_BACK_BUTTON);
+            if (overrideBack != null) {
+                overrideBackButton = overrideBack.equals("yes") ? true : false;
+            } else {
+                // if it's not provided, explicitly set overrideBackButton to false
+                // since it could be true from the last time showWebPage was called.
+                overrideBackButton = false;
+            }
+            // Patch - Support back button event - End
         }
 
         final CordovaWebView thatWebView = this.webView;
@@ -826,7 +923,12 @@ public class InAppBrowser extends CordovaPlugin {
                 back.setContentDescription("Back Button");
                 back.setId(Integer.valueOf(2));
                 Resources activityRes = cordova.getActivity().getResources();
-                int backResId = activityRes.getIdentifier("ic_action_previous_item", "drawable", cordova.getActivity().getPackageName());
+                // Patch - Change for SMPARCH-2910, Kapsel change - Start
+                int backResId = activityRes.getIdentifier("ic_action_previous_item", "drawable", cordova.getActivity().getClass().getPackage().getName());
+                if (backResId == 0) {
+                    backResId = activityRes.getIdentifier("ic_action_previous_item", "drawable", cordova.getActivity().getPackageName());
+                }
+                // Patch - Change for SMPARCH-2910, Kapsel change - End
                 Drawable backIcon = activityRes.getDrawable(backResId);
                 if (navigationButtonColor != "") back.setColorFilter(android.graphics.Color.parseColor(navigationButtonColor));
                 back.setBackground(null);
@@ -848,7 +950,12 @@ public class InAppBrowser extends CordovaPlugin {
                 forward.setLayoutParams(forwardLayoutParams);
                 forward.setContentDescription("Forward Button");
                 forward.setId(Integer.valueOf(3));
-                int fwdResId = activityRes.getIdentifier("ic_action_next_item", "drawable", cordova.getActivity().getPackageName());
+                // Patch - Change for SMPARCH-2910,Kapsel change - Start
+                int fwdResId = activityRes.getIdentifier("ic_action_next_item", "drawable", cordova.getActivity().getClass().getPackage().getName());
+                if (fwdResId == 0) {
+                    fwdResId = activityRes.getIdentifier("ic_action_next_item", "drawable", cordova.getActivity().getPackageName());
+                }
+                // Patch - Change for SMPARCH-2910,Kapsel change - End
                 Drawable fwdIcon = activityRes.getDrawable(fwdResId);
                 if (navigationButtonColor != "") forward.setColorFilter(android.graphics.Color.parseColor(navigationButtonColor));
                 forward.setBackground(null);
@@ -913,7 +1020,42 @@ public class InAppBrowser extends CordovaPlugin {
 
 
                 // WebView
-                inAppWebView = new WebView(cordova.getActivity());
+                inAppWebView = new WebView(cordova.getActivity()){
+                    //Kapsel Patch - Support back button event - Start
+                    @Override
+                    public boolean onKeyDown(int keyCode, KeyEvent event) {
+
+                        if (overrideBackButton && keyCode == KeyEvent.KEYCODE_BACK) {
+                            try {
+                                JSONObject obj = new JSONObject();
+                                obj.put("type", BACK_BUTTON_EVENT);
+                                sendUpdate(obj, true);
+                            } catch (JSONException e) {
+                                LOG.d(LOG_TAG, "Should never happen");
+                            }
+
+                            return true;
+                        }
+                        else {
+                            return super.onKeyDown(keyCode, event);
+                        }
+                    }
+                    //Kapsel Patch - Support back button event - End
+                };
+                // Kapsel change - attachment support
+                //
+                final CordovaPlugin attachmentPlugin = thatWebView.getPluginManager().getPlugin("AttachmentHandler");
+
+                if (attachmentPlugin != null) {
+                    inAppWebView.setDownloadListener(new DownloadListener() {
+                        @Override
+                        public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
+                            ((DownloadListener)attachmentPlugin).onDownloadStart(url, userAgent, contentDisposition, mimetype, contentLength);
+                            closeDialog();
+                        }
+                    });
+                }
+                // Kapsel change - attachment support - End
                 inAppWebView.setLayoutParams(new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
                 inAppWebView.setId(Integer.valueOf(6));
                 // File Chooser Implemented ChromeClient
@@ -945,6 +1087,9 @@ public class InAppBrowser extends CordovaPlugin {
                 settings.setBuiltInZoomControls(showZoomControls);
                 settings.setPluginState(android.webkit.WebSettings.PluginState.ON);
 
+                // Patch - Set text zoom to prevent UI issues, Kapsel change
+                settings.setTextZoom(100);
+
                 // Add postMessage interface
                 class JsObject {
                     @JavascriptInterface
@@ -972,6 +1117,15 @@ public class InAppBrowser extends CordovaPlugin {
                 if (appendUserAgent != null) {
                     settings.setUserAgentString(settings.getUserAgentString() + " " + appendUserAgent);
                 }
+                // Patch - CB-4083 , Kapsel change- Start
+                if (allowFileAccessFromFile) {
+                    // Jellybean locks down access for file URIs.
+                    if (android.os.Build.VERSION.SDK_INT > android.os.Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1) {
+                        Level16Apis.enableFileAccess(settings);
+                    }
+                    settings.setAllowFileAccess(true); // It is set to false by default on android 30
+                }
+                // Patch - CB-4083, Kapsel change - End
 
                 //Toggle whether this is enabled or not!
                 Bundle appSettings = cordova.getActivity().getIntent().getExtras();
