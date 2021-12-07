@@ -97,6 +97,9 @@ public class InAppBrowser extends CordovaPlugin {
     private static final String NULL = "null";
     protected static final String LOG_TAG = "InAppBrowser";
     private static final String SELF = "_self";
+    // Kapsel change  - if target is _parent, hadnle as _self
+    private static final String PARENT = "_parent";
+    // Kapsel change end
     private static final String SYSTEM = "_system";
     private static final String EXIT_EVENT = "exit";
     private static final String LOCATION = "location";
@@ -155,7 +158,7 @@ public class InAppBrowser extends CordovaPlugin {
     private boolean showFooter = false;
     private String footerColor = "";
     private String beforeload = "";
-    private boolean fullscreen = true;
+    private boolean fullscreen = false; // Kapsel change, default to non-full screen
     private String[] allowedSchemes;
     private InAppBrowserClient currentClient;
     private boolean allowFileAccessFromFile = false; // Patch - CB-4083, Kapsel change
@@ -186,8 +189,9 @@ public class InAppBrowser extends CordovaPlugin {
                 @Override
                 public void run() {
                     String result = "";
-                    // SELF
-                    if (SELF.equals(target)) {
+                    // Kapsel change - if target is _parent, handle as _self
+                    if (SELF.equals(target)|| PARENT.equals(target)) {
+                        // Kapsel change end
                         LOG.d(LOG_TAG, "in self");
                         /* This code exists for compatibility between 3.x and 4.x versions of Cordova.
                          * Previously the Config class had a static method, isUrlWhitelisted(). That
@@ -302,6 +306,18 @@ public class InAppBrowser extends CordovaPlugin {
             }
             injectDeferredObject(args.getString(0), jsWrapper);
         }
+        // Kapsel change
+        // injectScriptFile merely puts a script tag in the IAB that links to the file.  Loading the
+        // file from the IAB might not be allowed by the webview or the content security policy.
+        // injectScriptCodeFromFile reads the file and injects the code directly into the IAB.
+        else if (action.equals("injectScriptCodeFromFile")) {
+            String jsWrapper = null;
+            if (args.getBoolean(1)) {
+                jsWrapper = String.format("(function(){prompt(JSON.stringify([eval(%%s)]), 'gap-iab://%s')})()", callbackContext.getCallbackId());
+            }
+            String jsCode = getFileContentsAsString(args.getString(0));
+            injectDeferredObject(jsCode, jsWrapper);
+        } // Kapsel change end
         else if (action.equals("injectStyleCode")) {
             String jsWrapper;
             if (args.getBoolean(1)) {
@@ -856,7 +872,12 @@ public class InAppBrowser extends CordovaPlugin {
                 }
                 else {
                     ImageButton close = new ImageButton(cordova.getActivity());
-                    int closeResId = activityRes.getIdentifier("ic_action_remove", "drawable", cordova.getActivity().getPackageName());
+                    // Patch - Change for SMPARCH-2910, Kapsel change - Start
+                    int closeResId = activityRes.getIdentifier("ic_action_remove", "drawable", cordova.getActivity().getClass().getPackage().getName());
+                    if (closeResId == 0) {
+                        closeResId = activityRes.getIdentifier("ic_action_remove", "drawable", cordova.getActivity().getPackageName());
+                    }
+                    // Patch - Change for SMPARCH-2910, Kapsel change - End
                     Drawable closeIcon = activityRes.getDrawable(closeResId);
                     if (closeButtonColor != "") close.setColorFilter(android.graphics.Color.parseColor(closeButtonColor));
                     close.setImageDrawable(closeIcon);
