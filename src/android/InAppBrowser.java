@@ -1120,6 +1120,7 @@ public class InAppBrowser extends CordovaPlugin {
                 settings.setJavaScriptCanOpenWindowsAutomatically(true);
                 settings.setBuiltInZoomControls(showZoomControls);
                 settings.setPluginState(android.webkit.WebSettings.PluginState.ON);
+                settings.setAllowFileAccessFromFileURLs(true);
 
                 // Patch - Set text zoom to prevent UI issues, Kapsel change
                 settings.setTextZoom(100);
