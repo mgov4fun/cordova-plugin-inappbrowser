@@ -26,6 +26,11 @@
 #endif
 
 #import <Cordova/CDVPluginResult.h>
+#import <Cordova/CDVViewController.h>
+//kpasel change start
+#import <SafariServices/SafariServices.h>
+#import <objc/message.h>
+//kapsel change end
 
 #define    kInAppBrowserTargetSelf @"_self"
 #define    kInAppBrowserTargetSystem @"_system"
@@ -42,10 +47,13 @@
 
 #pragma mark CDVWKInAppBrowser
 
-@interface CDVWKInAppBrowser () {
+//kapsel change start
+@interface CDVWKInAppBrowser () <SFSafariViewControllerDelegate> {
     NSInteger _previousStatusBarStyle;
 }
+    @property (nonatomic, strong) id<WKNavigationDelegate> webViewDelegate;
 @end
+//kapsel change end
 
 @implementation CDVWKInAppBrowser
 
@@ -62,6 +70,13 @@ static CDVWKInAppBrowser* instance = nil;
     _callbackIdPattern = nil;
     _beforeload = @"";
     _waitForBeforeload = NO;
+    
+    //kapsel change start
+    // workaround for an issue in iOS Cordova 6.1.0 and InAppBrowser 4.0.0. The opened InAppBrowser goes missing when the App back to active status. E,g, back to foreground from background, back to FC from another app.
+    // See incidnet 2080316931, Fiori client shows blank screen when open fiori client twice
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppWillEnterForeground)
+    name:UIApplicationWillEnterForegroundNotification object:nil];
+    //kapsel change end
 }
 
 - (void)onReset
@@ -97,7 +112,9 @@ static CDVWKInAppBrowser* instance = nil;
     NSString* target = [command argumentAtIndex:1 withDefault:kInAppBrowserTargetSelf];
     NSString* options = [command argumentAtIndex:2 withDefault:@"" andClass:[NSString class]];
     
-    self.callbackId = command.callbackId;
+    //kapsel change start
+    //self.callbackId = command.callbackId;
+    //kapsel change end
     
     if (url != nil) {
         NSURL* baseUrl = [self.webViewEngine URL];
@@ -120,7 +137,13 @@ static CDVWKInAppBrowser* instance = nil;
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"incorrect number of arguments"];
     }
     
-    [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
+    //kapsel change start
+    //[pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
+    if (![target isEqualToString:kInAppBrowserTargetSystem]) {
+        [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
+        self.callbackId = command.callbackId;
+    }
+    //kapsel change end
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
@@ -299,6 +322,10 @@ static CDVWKInAppBrowser* instance = nil;
     // Run later to avoid the "took a long time" log message.
     dispatch_async(dispatch_get_main_queue(), ^{
         if (weakSelf.inAppBrowserViewController != nil) {
+            //kapsel change start
+            //only first time start to use animation to avoid ui deadlock
+            static BOOL animated = YES;
+            //kapsel change end
             float osVersion = [[[UIDevice currentDevice] systemVersion] floatValue];
             __strong __typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf->tmpWindow) {
@@ -309,13 +336,19 @@ static CDVWKInAppBrowser* instance = nil;
                 strongSelf->tmpWindow = [[UIWindow alloc] initWithFrame:frame];
             }
             UIViewController *tmpController = [[UIViewController alloc] init];
+
             [strongSelf->tmpWindow setRootViewController:tmpController];
             [strongSelf->tmpWindow setWindowLevel:UIWindowLevelNormal];
 
             if(!initHidden || osVersion < 11){
                 [self->tmpWindow makeKeyAndVisible];
             }
-            [tmpController presentViewController:nav animated:!noAnimate completion:nil];
+            //kapsel change start
+            //[tmpController presentViewController:nav animated:!noAnimate completion:nil];
+            [tmpController presentViewController:nav animated:animated completion:^{
+                    animated = NO;
+                }];
+            //kapsel change end
         }
     });
 }
@@ -357,13 +390,38 @@ static CDVWKInAppBrowser* instance = nil;
     [self.webViewEngine loadRequest:request];
 }
 
+//kapsel change start
+-(UIViewController *)getTopPresentedViewController {
+    UIViewController *presentingViewController = self.viewController;
+    if (presentingViewController.view.window != [UIApplication sharedApplication].keyWindow){
+        presentingViewController = [UIApplication sharedApplication].keyWindow.rootViewController;
+    }
+
+    while (presentingViewController.presentedViewController != nil && ![presentingViewController.presentedViewController isBeingDismissed]){
+        presentingViewController = presentingViewController.presentedViewController;
+    }
+    return presentingViewController;
+}
+
+- (void)safariViewControllerDidFinish:(SFSafariViewController *)controller{
+    [controller dismissViewControllerAnimated:YES completion:nil];
+}
 - (void)openInSystem:(NSURL*)url
 {
-    if ([[UIApplication sharedApplication] openURL:url] == NO) {
+    //fiori customization: open _system web url in Safari view controller on ios 9
+    if (([[url.scheme lowercaseString] isEqualToString:@"http"] || [[url.scheme lowercaseString] isEqualToString:@"https"])) {
+        SFSafariViewController* sf = [[SFSafariViewController alloc] initWithURL:url];
+        sf.delegate = self;
+        //check whether inappbrowser is presented, if so, use it to present the safari viewcontroller
+        UIViewController *topViewController = [self getTopPresentedViewController];
+        [topViewController presentViewController:sf animated:YES completion:nil];
+    }
+    else if ([[UIApplication sharedApplication] openURL:url] == NO) {
         [[NSNotificationCenter defaultCenter] postNotification:[NSNotification notificationWithName:CDVPluginHandleOpenURLNotification object:url]];
         [[UIApplication sharedApplication] openURL:url];
     }
 }
+//kapsel change end
 
 - (void)loadAfterBeforeload:(CDVInvokedUrlCommand*)command
 {
@@ -438,6 +496,41 @@ static CDVWKInAppBrowser* instance = nil;
     }
     [self injectDeferredObject:[command argumentAtIndex:0] withWrapper:jsWrapper];
 }
+
+//kapsel change start
+- (void)injectScriptCodeFromFile:(CDVInvokedUrlCommand*)command {
+    //First read text resource file from bundle
+    NSString* filePath = [command.arguments objectAtIndex:0];
+    NSString* strPathWithoutExtension = [filePath stringByDeletingPathExtension];
+    NSString* strExtension = [filePath pathExtension];
+    NSString* strPath = [[NSBundle mainBundle] pathForResource:strPathWithoutExtension ofType:strExtension];
+    NSString* strContent = [NSString stringWithContentsOfFile:strPath usedEncoding:nil error:nil];
+    CDVPluginResult* pluginResult = nil;
+    if (strContent == nil){
+       pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"File does not exist"];
+    }
+    else {
+        NSString* jsWrapper = nil;
+
+        if ((command.callbackId != nil) && ![command.callbackId isEqualToString:@"INVALID"]) {
+            jsWrapper = [NSString stringWithFormat:@"_cdvMessageHandler('%@',JSON.stringify([eval(%%@)]));", command.callbackId];
+        }
+        [self injectDeferredObject:strContent withWrapper:jsWrapper];
+    }
+}
+
+// workaround for an issue in iOS Cordova 6.1.0 and InAppBrowser 4.0.0. The opened InAppBrowser goes missing when the App back to active status. E,g, back to foreground from background, back to FC from another app.
+// See incidnet 2080316931, Fiori client shows blank screen when open fiori client twice
+- (void)onAppWillEnterForeground {
+    if (self.inAppBrowserViewController != nil) {
+        NSLog(@"CDVWKInAppBrowser onAppWillEnterForeground to make InAppBrowser as key and visible");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->tmpWindow makeKeyAndVisible];
+        });
+    }
+}
+
+//kapsel change end
 
 - (void)injectScriptFile:(CDVInvokedUrlCommand*)command
 {
@@ -657,12 +750,16 @@ static CDVWKInAppBrowser* instance = nil;
 
 - (void)browserExit
 {
+    //kapsel change start
+    /*//only call close method's successcallback after the view controller is dismissed
     if (self.callbackId != nil) {
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
                                                       messageAsDictionary:@{@"type":@"exit"}];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
         self.callbackId = nil;
     }
+    */
+    //kapsel change end
     
     [self.inAppBrowserViewController.configuration.userContentController removeScriptMessageHandlerForName:IAB_BRIDGE_NAME];
     self.inAppBrowserViewController.configuration = nil;
@@ -674,7 +771,9 @@ static CDVWKInAppBrowser* instance = nil;
     self.inAppBrowserViewController.webView = nil;
     
     // Set navigationDelegate to nil to ensure no callbacks are received from it.
-    self.inAppBrowserViewController.navigationDelegate = nil;
+    //kapsel change start
+    //self.inAppBrowserViewController.navigationDelegate = nil;
+    //kapsel change end
     self.inAppBrowserViewController = nil;
 
     // Set tmpWindow to hidden to make main webview responsive to touch again
@@ -821,6 +920,10 @@ BOOL isExiting = FALSE;
     self.closeButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
     self.closeButton.enabled = YES;
     
+    //kapsel change start
+    UIBarButtonItem* printButton = [[UIBarButtonItem alloc] initWithTitle:@"🖨" style:UIBarButtonItemStylePlain target:self action:@selector(printAction)];
+    printButton.enabled = YES;
+    //kapsel change end
     UIBarButtonItem* flexibleSpaceButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
     
     UIBarButtonItem* fixedSpaceButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFixedSpace target:nil action:nil];
@@ -1087,21 +1190,68 @@ BOOL isExiting = FALSE;
     return NO;
 }
 
+//kapsel change start
+- (void)printAction {
+    [self.spinner startAnimating];
+    
+    UIPrintInfo *printInfo = [UIPrintInfo printInfo];
+    printInfo.jobName = self.currentURL.lastPathComponent;
+    printInfo.outputType = UIPrintInfoOutputGeneral;
+    UIPrintInteractionController *printController = [UIPrintInteractionController sharedPrintController];
+    printController.printInfo = printInfo;
+    printController.delegate = self;
+    
+    printController.printFormatter = self.webView.viewPrintFormatter;
+    
+    [printController presentAnimated:true completionHandler: nil];
+
+}
+//kapsel change end
 - (void)close
 {
     self.currentURL = nil;
     
-    __weak UIViewController* weakSelf = self;
+    //kapsel change start
+    self.xhrBridge = nil;
+    //kapsel change end
+
+    __weak CDVWKInAppBrowserViewController* weakSelf = self;
     
     // Run later to avoid the "took a long time" log message.
     dispatch_async(dispatch_get_main_queue(), ^{
         isExiting = TRUE;
         lastReducedStatusBarHeight = 0.0;
         if ([weakSelf respondsToSelector:@selector(presentingViewController)]) {
-            [[weakSelf presentingViewController] dismissViewControllerAnimated:YES completion:nil];
+        //kapsel change start
+        /*
+                [[weakSelf presentingViewController] dismissViewControllerAnimated:YES completion:nil];
+            } else {
+                [[weakSelf parentViewController] dismissViewControllerAnimated:YES completion:nil];
+            }
+            */
+            [[weakSelf presentingViewController] dismissViewControllerAnimated:NO completion:^{
+                if (weakSelf.navigationDelegate.callbackId != nil) {
+                    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
+                                                                  messageAsDictionary:@{@"type":@"exit"}];
+                    [weakSelf.navigationDelegate.commandDelegate sendPluginResult:pluginResult callbackId:weakSelf.navigationDelegate.callbackId];
+                    // Set navigationDelegate to nil to ensure no callbacks are received from it.
+                    weakSelf.navigationDelegate.callbackId = nil;
+                    weakSelf.navigationDelegate = nil;
+                }
+            }];
+            [[[[UIApplication sharedApplication] delegate] window] makeKeyAndVisible];
         } else {
-            [[weakSelf parentViewController] dismissViewControllerAnimated:YES completion:nil];
+            [[weakSelf parentViewController] dismissViewControllerAnimated:NO completion:^{
+                if (weakSelf.navigationDelegate.callbackId != nil) {
+                    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
+                                                                  messageAsDictionary:@{@"type":@"exit"}];
+                    [weakSelf.navigationDelegate.commandDelegate sendPluginResult:pluginResult callbackId:weakSelf.navigationDelegate.callbackId];
+                    weakSelf.navigationDelegate.callbackId = nil;
+                    weakSelf.navigationDelegate = nil;
+                }
+            }];
         }
+        //kapsel change end
     });
 }
 
@@ -1282,11 +1432,14 @@ BOOL isExiting = FALSE;
 
     [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
 }
-
-#pragma mark UIAdaptivePresentationControllerDelegate
-
-- (void)presentationControllerWillDismiss:(UIPresentationController *)presentationController {
-    isExiting = TRUE;
+//kapsel change start
+-(void)printInteractionControllerDidPresentPrinterOptions:(UIPrintInteractionController *)printInteractionController {
+    [self.spinner stopAnimating];
 }
+
+-(void)printInteractionControllerDidFinishJob:(UIPrintInteractionController *)printInteractionController {
+    [self.spinner stopAnimating];
+}
+//kapsel change end
 
 @end //CDVWKInAppBrowserViewController

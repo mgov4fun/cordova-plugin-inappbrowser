@@ -46,7 +46,9 @@
 - (void)show:(CDVInvokedUrlCommand*)command;
 - (void)hide:(CDVInvokedUrlCommand*)command;
 - (void)loadAfterBeforeload:(CDVInvokedUrlCommand*)command;
-
+//kapsel change start
+- (void)injectScriptCodeFromFile:(CDVInvokedUrlCommand*)command;
+//kapsel change end
 @end
 
 @interface CDVWKInAppBrowserViewController : UIViewController <CDVScreenOrientationDelegate,WKNavigationDelegate,WKUIDelegate,WKScriptMessageHandler,UIAdaptivePresentationControllerDelegate>{
@@ -54,7 +56,9 @@
     CDVInAppBrowserOptions *_browserOptions;
     NSDictionary *_settings;
 }
-
+//kapsel change start
+    @property (nonatomic, strong) NSObject* xhrBridge;
+//kapsel change end
 @property (nonatomic, strong) IBOutlet WKWebView* webView;
 @property (nonatomic, strong) IBOutlet WKWebViewConfiguration* configuration;
 @property (nonatomic, strong) IBOutlet UIBarButtonItem* closeButton;
