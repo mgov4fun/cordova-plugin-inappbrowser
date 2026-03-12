@@ -1,21 +1,22 @@
-/*
-       Licensed to the Apache Software Foundation (ASF) under one
-       or more contributor license agreements.  See the NOTICE file
-       distributed with this work for additional information
-       regarding copyright ownership.  The ASF licenses this file
-       to you under the Apache License, Version 2.0 (the
-       "License"); you may not use this file except in compliance
-       with the License.  You may obtain a copy of the License at
+/**
+    Licensed to the Apache Software Foundation (ASF) under one
+    or more contributor license agreements.  See the NOTICE file
+    distributed with this work for additional information
+    regarding copyright ownership.  The ASF licenses this file
+    to you under the Apache License, Version 2.0 (the
+    "License"); you may not use this file except in compliance
+    with the License.  You may obtain a copy of the License at
 
-         http://www.apache.org/licenses/LICENSE-2.0
+        http://www.apache.org/licenses/LICENSE-2.0
 
-       Unless required by applicable law or agreed to in writing,
-       software distributed under the License is distributed on an
-       "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-       KIND, either express or implied.  See the License for the
-       specific language governing permissions and limitations
-       under the License.
+    Unless required by applicable law or agreed to in writing,
+    software distributed under the License is distributed on an
+    "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+    KIND, either express or implied.  See the License for the
+    specific language governing permissions and limitations
+    under the License.
 */
+
 package org.apache.cordova.inappbrowser;
 
 import android.annotation.SuppressLint;
@@ -57,6 +58,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.DownloadListener;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.ImageButton;
@@ -109,6 +111,7 @@ public class InAppBrowser extends CordovaPlugin {
     private static final String LOAD_STOP_EVENT = "loadstop";
     private static final String LOAD_ERROR_EVENT = "loaderror";
     private static final String BACK_BUTTON_EVENT = "backbutton"; //Kapsel Patch - Add back button event support
+    private static final String DOWNLOAD_EVENT = "download";
     private static final String MESSAGE_EVENT = "message";
     private static final String CLEAR_ALL_CACHE = "clearcache";
     private static final String CLEAR_SESSION_CACHE = "clearsessioncache";
@@ -289,6 +292,7 @@ public class InAppBrowser extends CordovaPlugin {
                         ((InAppBrowserClient)inAppWebView.getWebViewClient()).waitForBeforeload = false;
                     }
                     inAppWebView.loadUrl(url);
+
                 }
             });
         }
@@ -1054,7 +1058,6 @@ public class InAppBrowser extends CordovaPlugin {
                 View footerClose = createCloseButton(7);
                 footer.addView(footerClose);
 
-
                 // WebView
                 inAppWebView = new WebView(cordova.getActivity()){
                     //Kapsel Patch - Support back button event - Start
@@ -1082,15 +1085,6 @@ public class InAppBrowser extends CordovaPlugin {
                 //
                 final CordovaPlugin attachmentPlugin = thatWebView.getPluginManager().getPlugin("AttachmentHandler");
 
-                if (attachmentPlugin != null) {
-                    inAppWebView.setDownloadListener(new DownloadListener() {
-                        @Override
-                        public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
-                            ((DownloadListener)attachmentPlugin).onDownloadStart(url, userAgent, contentDisposition, mimetype, contentLength);
-                            closeDialog();
-                        }
-                    });
-                }
                 // Kapsel change - attachment support - End
                 inAppWebView.setLayoutParams(new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
                 inAppWebView.setId(Integer.valueOf(6));
@@ -1126,6 +1120,29 @@ public class InAppBrowser extends CordovaPlugin {
 
                 // Patch - Set text zoom to prevent UI issues, Kapsel change
                 settings.setTextZoom(100);
+
+                // Handle attachment plugin downloads and keep upstream download event support.
+                inAppWebView.setDownloadListener(new DownloadListener() {
+                    @Override
+                    public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
+                        if (attachmentPlugin instanceof DownloadListener) {
+                            ((DownloadListener) attachmentPlugin).onDownloadStart(url, userAgent, contentDisposition, mimetype, contentLength);
+                            closeDialog();
+                        }
+                        try {
+                            JSONObject succObj = new JSONObject();
+                            succObj.put("type", DOWNLOAD_EVENT);
+                            succObj.put("url", url);
+                            succObj.put("userAgent", userAgent);
+                            succObj.put("contentDisposition", contentDisposition);
+                            succObj.put("mimetype", mimetype);
+                            succObj.put("contentLength", contentLength);
+                            sendUpdate(succObj, true);
+                        } catch (Exception e) {
+                            LOG.e(LOG_TAG, e.getMessage());
+                        }
+                    }
+                });
 
                 // Add postMessage interface
                 class JsObject {
