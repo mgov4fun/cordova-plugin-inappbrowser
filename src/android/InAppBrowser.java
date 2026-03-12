@@ -21,11 +21,14 @@ package org.apache.cordova.inappbrowser;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.os.Handler;
 import android.os.Parcelable;
 import android.provider.Browser;
 import android.content.res.Resources;
@@ -156,14 +159,14 @@ public class InAppBrowser extends CordovaPlugin {
     private String closeButtonCaption = "";
     private String closeButtonColor = "";
     private boolean leftToRight = false;
-    private int toolbarColor = android.graphics.Color.LTGRAY;
+    private int toolbarColor = Color.LTGRAY;
     private boolean hideNavigationButtons = false;
     private String navigationButtonColor = "";
     private boolean hideUrlBar = false;
     private boolean showFooter = false;
     private String footerColor = "";
     private String beforeload = "";
-    private boolean fullscreen = false; // Kapsel change, default to non-full screen
+    private boolean fullscreen = true;
     private String[] allowedSchemes;
     private InAppBrowserClient currentClient;
     private boolean allowFileAccessFromFile = false; // Patch - CB-4083, Kapsel change
@@ -285,7 +288,7 @@ public class InAppBrowser extends CordovaPlugin {
                 @SuppressLint("NewApi")
                 @Override
                 public void run() {
-                    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
                         currentClient.waitForBeforeload = false;
                         inAppWebView.setWebViewClient(currentClient);
                     } else {
@@ -384,7 +387,7 @@ public class InAppBrowser extends CordovaPlugin {
             public void run() {
                 ApplicationInfo appInfo = webView.getContext().getApplicationContext().getApplicationInfo();
                 if ((appInfo.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
-                        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                     try {
                         WebView.setWebContentsDebuggingEnabled(true);
                     } catch (IllegalArgumentException e) {
@@ -578,7 +581,7 @@ public class InAppBrowser extends CordovaPlugin {
             this.openExternalExcludeCurrentApp(intent);
             return "";
             // not catching FileUriExposedException explicitly because buildtools<24 doesn't know about it
-        } catch (java.lang.RuntimeException e) {
+        } catch (RuntimeException e) {
             LOG.d(LOG_TAG, "InAppBrowser: Error loading url "+url+":"+ e.toString());
             return e.toString();
         }
@@ -803,7 +806,7 @@ public class InAppBrowser extends CordovaPlugin {
 
             String toolbarColorSet = features.get(TOOLBAR_COLOR);
             if (toolbarColorSet != null) {
-                toolbarColor = android.graphics.Color.parseColor(toolbarColorSet);
+                toolbarColor = Color.parseColor(toolbarColorSet);
             }
             String navigationButtonColorSet = features.get(NAVIGATION_COLOR);
             if (navigationButtonColorSet != null) {
@@ -848,6 +851,8 @@ public class InAppBrowser extends CordovaPlugin {
 
         // Create dialog in new thread
         Runnable runnable = new Runnable() {
+
+            private boolean inFullScreen = false;
             /**
              * Convert our DIP units to Pixels
              *
@@ -871,8 +876,8 @@ public class InAppBrowser extends CordovaPlugin {
                     TextView close = new TextView(cordova.getActivity());
                     close.setText(closeButtonCaption);
                     close.setTextSize(20);
-                    if (closeButtonColor != "") close.setTextColor(android.graphics.Color.parseColor(closeButtonColor));
-                    close.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                    if (closeButtonColor != "") close.setTextColor(Color.parseColor(closeButtonColor));
+                    close.setGravity(Gravity.CENTER_VERTICAL);
                     close.setPadding(this.dpToPixels(10), 0, this.dpToPixels(10), 0);
                     _close = close;
                 }
@@ -885,7 +890,7 @@ public class InAppBrowser extends CordovaPlugin {
                     }
                     // Patch - Change for SMPARCH-2910, Kapsel change - End
                     Drawable closeIcon = activityRes.getDrawable(closeResId);
-                    if (closeButtonColor != "") close.setColorFilter(android.graphics.Color.parseColor(closeButtonColor));
+                    if (closeButtonColor != "") close.setColorFilter(Color.parseColor(closeButtonColor));
                     close.setImageDrawable(closeIcon);
                     close.setScaleType(ImageView.ScaleType.FIT_CENTER);
                     close.getAdjustViewBounds();
@@ -910,6 +915,38 @@ public class InAppBrowser extends CordovaPlugin {
                 return _close;
             }
 
+            private void enableFullScreen(Activity activity, Window window) {
+                inFullScreen = true;
+                LayoutParams attrs = window.getAttributes();
+                attrs.flags |= LayoutParams.FLAG_FULLSCREEN;
+                attrs.flags |= LayoutParams.FLAG_KEEP_SCREEN_ON;
+                window.setAttributes(attrs);
+                if (Build.VERSION.SDK_INT >= 14)
+                {
+                    //noinspection all
+                    int flags = View.SYSTEM_UI_FLAG_LOW_PROFILE;
+                    if (Build.VERSION.SDK_INT >= 16)
+                    {
+                        flags = View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE;
+                    }
+                    window.getDecorView().setSystemUiVisibility(flags);
+                }
+
+            }
+
+            private void disableFullScreen(Activity activity, Window window) {
+                inFullScreen = false;
+                LayoutParams attrs = window.getAttributes();
+                attrs.flags &= ~LayoutParams.FLAG_FULLSCREEN;
+                attrs.flags &= ~LayoutParams.FLAG_KEEP_SCREEN_ON;
+                window.setAttributes(attrs);
+                if (Build.VERSION.SDK_INT >= 14)
+                {
+                    //noinspection all
+                    window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                }
+            }
+            
             @SuppressLint("NewApi")
             public void run() {
 
@@ -922,13 +959,30 @@ public class InAppBrowser extends CordovaPlugin {
                 dialog = new InAppBrowserDialog(cordova.getActivity(), android.R.style.Theme_NoTitleBar);
                 dialog.getWindow().getAttributes().windowAnimations = android.R.style.Animation_Dialog;
                 dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+                final View decor = dialog.getWindow().getDecorView();
+                decor.setOnSystemUiVisibilityChangeListener (new View.OnSystemUiVisibilityChangeListener() {
+                    public void onSystemUiVisibilityChange(int visibility) {
+                        new Handler().postDelayed(new Runnable() {
+                            public void run(){
+                                if (inFullScreen)
+                                {
+                                    decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE);
+                                }
+                            }
+                        }, 3000);
+                    }
+                });
                 if (fullscreen) {
-                    dialog.getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                    dialog.getWindow().setFlags(LayoutParams.FLAG_FULLSCREEN, LayoutParams.FLAG_FULLSCREEN);
                 }
                 dialog.setCancelable(true);
                 dialog.setInAppBroswer(getInAppBrowser());
 
                 // Main container layout
+                RelativeLayout fsmain = new RelativeLayout(cordova.getActivity());
+                RelativeLayout fullScreenMain = new RelativeLayout(cordova.getActivity());
+                fullScreenMain.setLayoutParams(new RelativeLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+                LinearLayout browserMain = new LinearLayout(cordova.getActivity());
                 LinearLayout main = new LinearLayout(cordova.getActivity());
                 main.setOrientation(LinearLayout.VERTICAL);
 
@@ -970,7 +1024,7 @@ public class InAppBrowser extends CordovaPlugin {
                 }
                 // Patch - Change for SMPARCH-2910, Kapsel change - End
                 Drawable backIcon = activityRes.getDrawable(backResId);
-                if (navigationButtonColor != "") back.setColorFilter(android.graphics.Color.parseColor(navigationButtonColor));
+                if (navigationButtonColor != "") back.setColorFilter(Color.parseColor(navigationButtonColor));
                 back.setBackground(null);
                 back.setImageDrawable(backIcon);
                 back.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -997,7 +1051,7 @@ public class InAppBrowser extends CordovaPlugin {
                 }
                 // Patch - Change for SMPARCH-2910,Kapsel change - End
                 Drawable fwdIcon = activityRes.getDrawable(fwdResId);
-                if (navigationButtonColor != "") forward.setColorFilter(android.graphics.Color.parseColor(navigationButtonColor));
+                if (navigationButtonColor != "") forward.setColorFilter(Color.parseColor(navigationButtonColor));
                 forward.setBackground(null);
                 forward.setImageDrawable(fwdIcon);
                 forward.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -1045,7 +1099,7 @@ public class InAppBrowser extends CordovaPlugin {
                 if(footerColor != "") {
                     _footerColor = Color.parseColor(footerColor);
                 } else {
-                    _footerColor = android.graphics.Color.LTGRAY;
+                    _footerColor = Color.LTGRAY;
                 }
                 footer.setBackgroundColor(_footerColor);
                 RelativeLayout.LayoutParams footerLayout = new RelativeLayout.LayoutParams(LayoutParams.MATCH_PARENT, this.dpToPixels(TOOLBAR_HEIGHT));
@@ -1089,12 +1143,11 @@ public class InAppBrowser extends CordovaPlugin {
                 inAppWebView.setLayoutParams(new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
                 inAppWebView.setId(Integer.valueOf(6));
                 // File Chooser Implemented ChromeClient
-                inAppWebView.setWebChromeClient(new InAppChromeClient(thatWebView) {
-                    public boolean onShowFileChooser (WebView webView, ValueCallback<Uri[]> filePathCallback, WebChromeClient.FileChooserParams fileChooserParams)
-                    {
+                InAppChromeClient inAppChromeClient = new InAppChromeClient(thatWebView, browserMain, fullScreenMain) {
+                    public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
                         LOG.d(LOG_TAG, "File Chooser 5.0+");
                         // If callback exists, finish it.
-                        if(mUploadCallback != null) {
+                        if (mUploadCallback != null) {
                             mUploadCallback.onReceiveValue(null);
                         }
                         mUploadCallback = filePathCallback;
@@ -1108,14 +1161,38 @@ public class InAppBrowser extends CordovaPlugin {
                         cordova.startActivityForResult(InAppBrowser.this, Intent.createChooser(content, "Select File"), FILECHOOSER_REQUESTCODE);
                         return true;
                     }
-                });
+                };
+                inAppChromeClient.setOnToggledFullscreen(new VideoEnabledWebChromeClient.ToggledFullscreenCallback() {
+                    @Override
+                    public void toggledFullscreen(boolean fullscreenV)
+                    {
+                        // Your code to handle the full-screen change, for example showing and hiding the title bar. Example:
+                        
+                        Activity activity = cordova.getActivity();
+                        Window window = dialog.getWindow();
+                        if (fullscreenV)
+                        {
+                            enableFullScreen(activity, window);
+                            activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+                        }
+                        else
+                        {
+                            if (!fullscreen)
+                            {
+                                disableFullScreen(activity, window);
+                            }
+                            activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
+                        }
+                    }
+                });   
+                inAppWebView.setWebChromeClient(inAppChromeClient);             
                 currentClient = new InAppBrowserClient(thatWebView, edittext, beforeload);
                 inAppWebView.setWebViewClient(currentClient);
                 WebSettings settings = inAppWebView.getSettings();
                 settings.setJavaScriptEnabled(true);
                 settings.setJavaScriptCanOpenWindowsAutomatically(true);
                 settings.setBuiltInZoomControls(showZoomControls);
-                settings.setPluginState(android.webkit.WebSettings.PluginState.ON);
+                settings.setPluginState(WebSettings.PluginState.ON);
                 settings.setAllowFileAccessFromFileURLs(true);
 
                 // Patch - Set text zoom to prevent UI issues, Kapsel change
@@ -1230,10 +1307,10 @@ public class InAppBrowser extends CordovaPlugin {
                     webViewLayout.addView(footer);
                 }
 
-                WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
+                LayoutParams lp = new LayoutParams();
                 lp.copyFrom(dialog.getWindow().getAttributes());
-                lp.width = WindowManager.LayoutParams.MATCH_PARENT;
-                lp.height = WindowManager.LayoutParams.MATCH_PARENT;
+                lp.width = LayoutParams.MATCH_PARENT;
+                lp.height = LayoutParams.MATCH_PARENT;
 
                 if (dialog != null) {
                     dialog.setContentView(main);
